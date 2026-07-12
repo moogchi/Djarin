@@ -93,6 +93,8 @@ Djarin is a USB-C inline board that protects, monitors, and (eventually) selecti
 - EN tied directly to VIN (always-on)
 - C6 (1µF) input, C8 (1µF) output ceramic caps
 
+## ![Face 2 LDO](./images/LDO3.3.png)
+
 ### Still to do on Face 2:
 
 - FUSB302 (PD negotiation reader, I2C)
