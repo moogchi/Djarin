@@ -66,7 +66,9 @@ Djarin is a USB-C inline board that protects, monitors, and (eventually) selecti
   - Anode/Cathode sense traces: short as possible
   - Gate Drive/Gate Pull Down: no vias, short/thick traces, keep close to MOSFET gate
 
-## ![Face 1 Reverse Polarity Protection ](./images/Reverse_Polarity.png)
+![Face 1 Reverse Polarity Protection](./images/Reverse_Polarity.png)
+
+---
 
 ## Face 2 — Brain (Power Regulation + PD Negotiation)
 
@@ -85,7 +87,7 @@ Djarin is a USB-C inline board that protects, monitors, and (eventually) selecti
   - C7 (1nF) PG decoupling, C4 (6.8nF) soft-start timing on SS
 - Output distributed via global `+5V` power symbol (used on both Face 1 and Face 2 — KiCad treats same-named power symbols as one global net, no hierarchical labels needed for power rails)
 
-## ![Face 2 Buck Converter](./images/Buck_Converter.png)
+![Face 2 Buck Converter](./images/Buck_Converter.png)
 
 ### U6 — AP2112K-3.3 (LDO, 5V → 3.3V)
 
@@ -93,47 +95,121 @@ Djarin is a USB-C inline board that protects, monitors, and (eventually) selecti
 - EN tied directly to VIN (always-on)
 - C6 (1µF) input, C8 (1µF) output ceramic caps
 
-## ![Face 2 LDO](./images/LDO3.3.png)
+![Face 2 LDO](./images/LDO3.3.png)
 
-### Still to do on Face 2:
+### U7 — STM32F103C8Tx
 
-- FUSB302 (PD negotiation reader, I2C)
-- STM32 (reads FUSB302, drives OLED/LED, handles button, controls Face 4 mux)
-- SWD programming header (or UART bootloader + BOOT0 — decision pending)
+LQFP48 package, chosen for native USB peripheral (needed for a planned software-triggered DFU bootloader jump — hold button 10s → firmware jumps to system bootloader, reflash over the same USB-C cable, no SWD probe required).
+
+- **Power:** all VDD pins (1/24/36/48) + VDDA (pin 9) → +3.3V; all VSS/VSSA (23/8) → GND directly (no cap needed, GND-to-GND is a no-op)
+- **Decoupling:** one 100nF ceramic per VDD/VDDA pin (C11, C12, C13), one bulk cap (C14, 5µF) on the rail
+- **VBAT:** tied to +3.3V directly (no external RTC backup battery used, per ST's own AN2586 recommendation)
+- **NRST:** 100nF cap (C15) to GND per ST reference reset circuit
+- **BOOT0 (pin 44):** 10kΩ pull-down (R11) to GND — forces normal flash boot by default; DFU entry handled entirely in firmware (magic value in backup register + software reset + manual jump to system bootloader), not by physically toggling this pin
+- **Clock (PD0/PD1):** external 8MHz crystal (Y1) + two 10pF loading caps (C16, C17) to GND — required because USB timing needs a precise external HSE clock; internal RC oscillator is not accurate enough (confirmed in ST AN2586: "CAN and USB OTG FS... can only function if an external 8MHz, 14.7456MHz or 25MHz clock (HSE) is present")
+- **I2C1 (PB6=SCL, PB7=SDA):** shared bus with FUSB302 and Face 3's OLED. R12, R13 (4.7kΩ each) pull-ups to +3.3V — one set only, since it's one shared bus, not per-device
+- **GPIO assignments:**
+  - PA4 → `DATA_EN` (drives Face 4's HD3SS3220 ENn_CC pin — the security data on/off toggle)
+  - PA5 → `BTN` (button input, external 10kΩ pull-up R15 to +3.3V, reads LOW when pressed)
+  - PA6 → `LED` (status LED, through 330Ω R14)
+  - PA8 → FUSB302 INT_N (interrupt input)
+
+![Face 2 STM32 Power/Reset/Boot/Clock](./images/STM32.png)
+
+### U6 — FUSB302BMPX (PD negotiation reader)
+
+- Plain address variant (0x22) — address doesn't matter since only one instance on the bus
+- **VDD (pin 3)** → +3.3V (NOT VDD_PROT — this is a logic supply pin, would exceed max rating if fed raw/protected VBUS)
+- **VBUS (pin 2)** → `VDD_PROT` (Face 1's protected output) — confirmed safe: datasheet states "DAC can measure VBUS up to 20V" and this pin is explicitly described as "expected to be an OVP protected input," which VDD_PROT is
+- **CC1/CC2** → matched to Face 1's TVS-protected `CC1_PROT`/`CC2_PROT` nets
+- **SDA/SCL/INT_N** → STM32 I2C bus + PA8
+- **VCONN (pins 12/13)** → left unconnected (not supporting electronically-marked/active cables in this design)
+- **GND** → GND
+
+![Face 2 FUSB302](./images/FUSB302.png)
+
+### SWD/bootloader decision
+
+Chose software-triggered DFU (hold button 10s → firmware writes magic value to backup register → software reset → manual jump to system bootloader → enumerates as USB DFU device over the same cable) over a physical SWD header, for a cleaner enclosure with no exposed debug header.
+
+**Tradeoff accepted:** no live hardware debugging (breakpoints, register inspection) during firmware bring-up — will rely on serial prints / DFU reflashing for iteration.
 
 ---
 
-## Face 3 — Display / Control (planned, not yet built)
+## Face 3 — Display / Control
 
-- SSD1306 OLED — displays PD negotiation status + Face 4 data-connection state
-- Bicolor status LED — fault/normal indicator
-- Single tactile button — toggles Face 4's data passthrough on/off
+- **U8 — SSD1306 OLED, 0.91" (128×32), I2C** (`ER_OLEDM0.91_1x-I2C`) — chosen over the more common 0.96" square module specifically for a longer/thinner form factor to match the keyfob-scale enclosure goal
+  - VCC → +3.3V, GND → GND
+  - SDA/SCL → shared I2C bus (global labels `I2C_SDA`/`I2C_SCL`, Bidirectional shape)
+- **SW1 — tactile button**, other leg to GND, `BTN` net (external pull-up lives on Face 2, R15 10kΩ to +3.3V)
+- **D1 — status LED** + **R14 (330Ω)** current-limiting resistor in series, driven by `LED` net (PA6)
+
+![Face 3 Display and Control](./images/Display.png)
 
 ---
 
-## Face 4 — SuperSpeed Passthrough + Security Mux (planned, not yet built)
+## Face 4 — SuperSpeed Passthrough + Security Mux
 
-**Rationale:** project scope expanded beyond basic power protection (considered "trivial"/commonly done) to include actual USB 3.x data passthrough with a security-oriented disconnect feature — a stronger differentiator for HWE recruiting.
+### U10 — HD3SS3220IRNHT (USB Type-C DRP Port Controller w/ SuperSpeed 2:1 MUX)
 
-- Low-capacitance ESD protection IC rated for SuperSpeed lines (e.g., TI TPD4S014/016) — USBLC6-2SC6 is NOT suitable for these speeds
-- USB3-capable mux/switch IC (e.g., TUSB546-class part), enable pin driven by STM32
-- Lets user toggle "Charge + Data" vs. "Charge Only" mode via Face 3's button
-- MCU cannot process RX/TX SuperSpeed signals directly (needs dedicated PHY/SerDes, beyond STM32 capability) — this is pure passive passthrough through the mux, no MCU signal processing of the data itself
-- **Explicitly out of scope:** Thunderbolt (requires active redriver/retimer silicon + protocol stack, not realistic for this project)
-- **Known difficulty/risk:** differential pair length-matching + controlled impedance routing at PCB layout stage — new skill area, budgeting real time for this rather than treating as trivial
+**Why this part (superseded two earlier candidates):**
+
+- TUSB542 (TI) — correct part conceptually but SnapMagic had no usable 2D/schematic symbol available
+- HD3SS6126 — in KiCad's default library, but it's a generic KVM-style 2:1/1:2 differential switch with no CC-based orientation awareness; wrong tool for a flippable Type-C connector
+- **HD3SS3220** — also in KiCad's default library, and is specifically designed to monitor CC1/CC2 itself, autonomously detect which physical SuperSpeed pair (RX1/TX1 or RX2/TX2) is actually live based on cable orientation, and resolve it to a single clean output pair. This is the correct tool for "one flippable USB-C connector."
+
+**Wiring:**
+
+- RXP/RXN/RX1P/RX1N/RX2P/RX2N/TXP/TXN/TX1.../TX2... → J1's SuperSpeed pins (both orientation pairs)
+- CC1/CC2 → same `CC1_PROT`/`CC2_PROT` nets as FUSB302 (fan-out from Face 1's TVS is fine, multiple listeners on CC lines is normal)
+- **VBUS_DET (pin 5)** → 910kΩ resistor (R16, nearest E24 standard to TI's specified 900kΩ) from `VDD_PROT`. No divider — single series resistor per datasheet, chip has its own internal reference.
+- **PORT (pin 4)** → left unconnected (NC) → configures chip for DRP (dual-role port) mode, appropriate since this board isn't fixed as host or device
+- **ADDR (pin 22)** → left unconnected (NC) → puts chip in GPIO mode rather than I2C mode (not using I2C control, ENn_CC handles the toggle)
+- **ENn_CC (pin 23)** → `DATA_EN` net from STM32 PA4. Active-low: pulled low = enabled/normal operation, pulled high = fully disabled (CC logic + SS mux both shut off). This is the security data on/off toggle.
+- **VDD5 (pin 30)** → +5V rail, **VCC33 (pin 8)** → +3.3V rail (chip needs both supplies)
+- **DIR, VCONN_FAULT_N, INT_N/OUT3, ID** — left unconnected (optional features not used in this implementation)
+- **GND/EXP_PAD** → GND
+
+![Face 4 HD3SS3220 Wiring](./images/HD3SS3220.png)
+
+### ⚠️ OPEN ARCHITECTURAL ISSUE — not yet resolved
+
+Two unresolved problems discovered while wiring J2 (the downstream USB-C receptacle):
+
+1. **CC1/CC2 conflict between J1 and J2.** HD3SS3220 only resolves ONE connector's (J1's) cable-orientation ambiguity down to a single fixed SuperSpeed pair — it does not handle a second independent flippable connector. Wiring J2's CC1/CC2 directly to the same `CC1_PROT`/`CC2_PROT` nodes as J1 is WRONG: if devices are plugged into both J1 and J2 simultaneously, they would electrically fight over the same CC negotiation lines. Real docks/hubs solve this by giving the downstream port its own independent, typically fixed-role (DFP/host) CC behavior, decoupled from the upstream port's negotiation — this is architecturally closer to designing a small USB hub than a simple inline passthrough.
+   - **Options to resolve (not yet decided):** (a) add a second HD3SS3220-class chip dedicated to J2's own orientation/CC resolution, feeding from U10's single resolved output on its "fixed" side, or (b) research real USB hub/dock reference designs for how downstream-port CC/role separation is normally done.
+2. **J2 SuperSpeed pair is only fed from ONE of U10's resolved outputs.** Since J2 is also a flippable connector but U10 only produces a single resolved RX/TX pair (it was designed assuming a fixed-orientation "host" side, like the TI eval boards' USB Type-A connector), J2 currently only achieves SuperSpeed if plugged in one specific orientation. Documented as a known limitation pending the CC-conflict resolution above, since fixing #1 properly (second orientation-resolving chip) would likely fix this too.
+3. **D+/D- (USB 2.0) has no active switch element at all.** HD3SS3220 is SuperSpeed-only — it has no D+/D- pins. Current plan: D+/D- pairs are simply shorted together at each connector (D+1↔D+2, D-1↔D-2 — standard Type-C practice per TI reference designs, since only one pair is ever live in a given cable) and pass through fixed/always-on, protected only by ESD. This means the `DATA_EN` security toggle currently only cuts SuperSpeed, not USB 2.0 fallback data — a real gap if "data off" is meant to be a complete cutoff. Would need a separate small USB2 switch IC (e.g., TS5USBA224-class part) gated by the same `DATA_EN` signal to close this gap.
+
+**Bottom line:** Face 4's SuperSpeed input side (J1 + U10) is solid and correctly wired. The output side (J2) and full data-off coverage (D+/D-) need real design work before this face is complete — not a quick fix, a genuine architecture decision to make with time and probably some real USB hub reference designs to study.
 
 ---
 
 ## Key Component Decisions Log
 
-| Part           | Role                         | Why chosen                                                                                     |
-| -------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
-| USBLC6-2SC6    | CC1/CC2/VBUS ESD             | Standard USB-C TVS array, cheap, well-documented                                               |
-| LM74610QDGKRQ1 | Reverse-voltage protection   | Near-zero drop "ideal diode," no GND pin needed                                                |
-| LM397          | Surge/overvoltage comparator | Pin-compatible with TL331, general-purpose, fast enough since TVS handles true fast transients |
-| MP2393         | VBUS → 5V buck               | Active/recommended replacement for MP2307, wider input range, PG output                        |
-| AP2112K-3.3    | 5V → 3.3V LDO                | Simple, standard logic supply for STM32/FUSB302                                                |
+| Part                   | Role                                           | Why chosen                                                                                                                                                                                                                                |
+| ---------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| USBLC6-2SC6            | CC1/CC2/VBUS ESD                               | Standard USB-C TVS array, cheap, well-documented                                                                                                                                                                                          |
+| LM74610QDGKRQ1         | Reverse-voltage protection                     | Near-zero drop "ideal diode," no GND pin needed                                                                                                                                                                                           |
+| LM397                  | Surge/overvoltage comparator                   | Pin-compatible with TL331, general-purpose, fast enough since TVS handles true fast transients                                                                                                                                            |
+| MP2393                 | VBUS → 5V buck                                 | Active/recommended replacement for MP2307, wider input range, PG output                                                                                                                                                                   |
+| AP2112K-3.3            | 5V → 3.3V LDO                                  | Simple, standard logic supply for STM32/FUSB302                                                                                                                                                                                           |
+| STM32F103C8Tx          | MCU / brain                                    | Native USB peripheral (needed for DFU bootloader plan), prior hands-on experience with this family                                                                                                                                        |
+| FUSB302BMPX            | PD negotiation reader                          | Standard, well-documented part, in KiCad default library                                                                                                                                                                                  |
+| SSD1306 0.91" (128×32) | OLED display                                   | Longer/thinner form factor fits keyfob-scale enclosure goal better than the common 0.96" square module                                                                                                                                    |
+| HD3SS3220IRNHT         | SuperSpeed 2:1 mux w/ CC orientation detection | Only candidate found that both (a) autonomously resolves Type-C cable-flip orientation via CC1/CC2 and (b) has a usable KiCad symbol in the default library — TUSB542 lacked an available schematic symbol, HD3SS6126 lacked CC-awareness |
 
 ---
 
-_Document reflects design state as of the most recent working session. Face 2 (FUSB302/STM32 detail), Face 3, and Face 4 schematics still to be completed._
+## Status Summary
+
+- **Face 1 (Protection):** complete — TVS, surge comparator + cutoff, reverse-voltage protection
+- **Face 2 (Brain):** complete — MP2393 buck, AP2112K LDO, STM32F103C8Tx (power/reset/boot/clock/I2C), FUSB302
+- **Face 3 (Display/Control):** complete — OLED, button, status LED
+- **Face 4 (SuperSpeed passthrough):** J1-side input wiring complete and correct; **J2-side (downstream connector) has an unresolved architectural conflict — see "OPEN ARCHITECTURAL ISSUE" above.** Do not wire J2's CC1/CC2 to the same nodes as J1 until this is resolved.
+- **Mechanical:** moving from folded-triangle to square-prism enclosure concept, keyfob-scale target (~35-40mm × 15-20mm per face). Not yet modeled in Fusion 360.
+- **Not yet started:** PCB footprint assignment, board layout (all 4 faces as separate rigid boards + FPC jumpers), 4-layer stackup, differential pair routing for SuperSpeed lines.
+
+---
+
+_Document reflects design state as of the most recent working session._
